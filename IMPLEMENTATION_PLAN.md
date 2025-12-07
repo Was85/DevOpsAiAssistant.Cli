@@ -74,8 +74,35 @@ dotnet add src/DevOpsAiAssistant.Cli package Microsoft.Extensions.Configuration.
 dotnet add src/DevOpsAiAssistant.Cli package Microsoft.Extensions.Configuration.UserSecrets
 
 # Tests
+dotnet add tests/DevOpsAiAssistant.Agents.Tests package Microsoft.NET.Test.Sdk
 dotnet add tests/DevOpsAiAssistant.Agents.Tests package FluentAssertions
+dotnet add tests/DevOpsAiAssistant.Domain.Tests package Microsoft.NET.Test.Sdk
 dotnet add tests/DevOpsAiAssistant.Domain.Tests package FluentAssertions
+```
+
+### 1.4 Project File Configurations
+
+Add these settings to all `.csproj` files:
+
+**Directory.Build.props** (create in solution root)
+```xml
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>
+```
+
+**src/DevOpsAiAssistant.Cli/DevOpsAiAssistant.Cli.csproj** - Add appsettings copy:
+```xml
+<ItemGroup>
+  <Content Include="appsettings.json">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  </Content>
+</ItemGroup>
 ```
 
 ### 1.3 Final Folder Structure
@@ -203,6 +230,7 @@ public sealed record PipelineMetadata
     public bool HasTests { get; init; }
     public bool HasCaching { get; init; }
     public bool HasSecurityScanning { get; init; }
+    public bool HasArtifactPublishing { get; init; }
     public IReadOnlyList<string> DetectedTools { get; init; } = [];
 }
 ```
@@ -303,8 +331,8 @@ public static class PipelineAnalyzerTools
 
         return new PipelineMetadataDto
         {
-            JobCount = CountJobs(root, platform),
-            StepCount = CountSteps(root, platform),
+            JobCount = CountJobs(root),
+            StepCount = CountSteps(yamlContent),
             HasTests = content.Contains("dotnet test") || content.Contains("vstest") || content.Contains("pytest") || content.Contains("npm test"),
             HasCaching = content.Contains("cache@") || content.Contains("actions/cache"),
             HasSecurityScanning = content.Contains("sonar") || content.Contains("owasp") || content.Contains("snyk") || content.Contains("codeql"),
@@ -313,7 +341,7 @@ public static class PipelineAnalyzerTools
         };
     }
 
-    private static int CountJobs(YamlMappingNode root, string platform)
+    private static int CountJobs(YamlMappingNode root)
     {
         if (root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobs) && jobs is YamlMappingNode jobsNode)
         {
@@ -329,14 +357,13 @@ public static class PipelineAnalyzerTools
         return 1; // Single job pipeline
     }
 
-    private static int CountSteps(YamlMappingNode root, string platform)
+    private static int CountSteps(string yamlContent)
     {
         var count = 0;
-        var yaml = root.ToString();
-        count = yaml.Split("- task:", StringSplitOptions.None).Length - 1;
-        count += yaml.Split("- script:", StringSplitOptions.None).Length - 1;
-        count += yaml.Split("- uses:", StringSplitOptions.None).Length - 1;
-        count += yaml.Split("- run:", StringSplitOptions.None).Length - 1;
+        count = yamlContent.Split("- task:", StringSplitOptions.None).Length - 1;
+        count += yamlContent.Split("- script:", StringSplitOptions.None).Length - 1;
+        count += yamlContent.Split("- uses:", StringSplitOptions.None).Length - 1;
+        count += yamlContent.Split("- run:", StringSplitOptions.None).Length - 1;
         return Math.Max(count, 1);
     }
 
@@ -411,18 +438,19 @@ public static class PipelineAnalyzerTools
 namespace DevOpsAiAssistant.Agents.Services;
 
 using System.Text.Json;
-using DevOpsAiAssistant.Agents.Configuration;
-using DevOpsAiAssistant.Agents.Tools;
 using DevOpsAiAssistant.Domain.Abstractions;
 using DevOpsAiAssistant.Domain.Enums;
 using DevOpsAiAssistant.Domain.Models;
-using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.Logging;
 
 public sealed class DevOpsAssistant : IDevOpsAssistant
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     private readonly AIAgent _agent;
     private readonly ILogger<DevOpsAssistant> _logger;
 
@@ -480,10 +508,7 @@ public sealed class DevOpsAssistant : IDevOpsAssistant
                 .Replace("```", "")
                 .Trim();
 
-            var response = JsonSerializer.Deserialize<AgentResponse>(json, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            });
+            var response = JsonSerializer.Deserialize<AgentResponse>(json, JsonOptions);
 
             if (response is null)
             {
@@ -509,6 +534,7 @@ public sealed class DevOpsAssistant : IDevOpsAssistant
                     HasTests = response.Metadata.HasTests,
                     HasCaching = response.Metadata.HasCaching,
                     HasSecurityScanning = response.Metadata.HasSecurityScanning,
+                    HasArtifactPublishing = response.Metadata.HasArtifactPublishing,
                     DetectedTools = response.Metadata.DetectedTools ?? []
                 } : null
             };
@@ -559,6 +585,7 @@ public sealed class DevOpsAssistant : IDevOpsAssistant
         public bool HasTests { get; init; }
         public bool HasCaching { get; init; }
         public bool HasSecurityScanning { get; init; }
+        public bool HasArtifactPublishing { get; init; }
         public List<string>? DetectedTools { get; init; }
     }
 }
@@ -571,10 +598,9 @@ public sealed class DevOpsAssistant : IDevOpsAssistant
 namespace DevOpsAiAssistant.Agents;
 
 using Azure.AI.OpenAI;
-using Azure.Identity;
 using DevOpsAiAssistant.Agents.Configuration;
-using DevOpsAiAssistant.Agents.Tools;
 using DevOpsAiAssistant.Agents.Services;
+using DevOpsAiAssistant.Agents.Tools;
 using DevOpsAiAssistant.Domain.Abstractions;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.OpenAI;
@@ -615,6 +641,7 @@ public static class DependencyInjection
                 "hasTests": false,
                 "hasCaching": false,
                 "hasSecurityScanning": false,
+                "hasArtifactPublishing": false,
                 "detectedTools": []
             }
         }
@@ -745,6 +772,12 @@ using Spectre.Console.Cli;
 
 public sealed class AnalyzeCommand : AsyncCommand<AnalyzeSettings>
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     private readonly IDevOpsAssistant _assistant;
 
     public AnalyzeCommand(IDevOpsAssistant assistant)
@@ -850,6 +883,7 @@ public sealed class AnalyzeCommand : AsyncCommand<AnalyzeSettings>
             metaTable.AddRow("Has Tests:", result.Metadata.HasTests ? "[green]Yes[/]" : "[red]No[/]");
             metaTable.AddRow("Has Caching:", result.Metadata.HasCaching ? "[green]Yes[/]" : "[red]No[/]");
             metaTable.AddRow("Security Scanning:", result.Metadata.HasSecurityScanning ? "[green]Yes[/]" : "[yellow]No[/]");
+            metaTable.AddRow("Artifact Publishing:", result.Metadata.HasArtifactPublishing ? "[green]Yes[/]" : "[yellow]No[/]");
 
             if (result.Metadata.DetectedTools.Count > 0)
             {
@@ -914,11 +948,7 @@ public sealed class AnalyzeCommand : AsyncCommand<AnalyzeSettings>
 
     private static void OutputJson(PipelineAnalysisResult result)
     {
-        var json = JsonSerializer.Serialize(result, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-        });
+        var json = JsonSerializer.Serialize(result, JsonOptions);
         Console.WriteLine(json);
     }
 
