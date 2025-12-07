@@ -1,3 +1,11 @@
 <Solution>
-  <Project Path="DevOpsAiAssistant.Cli/DevOpsAiAssistant.Cli.csproj" />
+  <Folder Name="/src/">
+    <Project Path="src/DevOpsAiAssistant.Domain/DevOpsAiAssistant.Domain.csproj" />
+    <Project Path="src/DevOpsAiAssistant.Agents/DevOpsAiAssistant.Agents.csproj" />
+    <Project Path="src/DevOpsAiAssistant.Cli/DevOpsAiAssistant.Cli.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DevOpsAiAssistant.Domain.Tests/DevOpsAiAssistant.Domain.Tests.csproj" />
+    <Project Path="tests/DevOpsAiAssistant.Agents.Tests/DevOpsAiAssistant.Agents.Tests.csproj" />
+  </Folder>
 </Solution>
