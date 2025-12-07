@@ -771,7 +771,7 @@ public sealed class AnalyzeCommand : AsyncCommand<AnalyzeSettings>
                 FileName = fileName
             };
 
-            PipelineAnalysisResult result;
+            PipelineAnalysisResult result = null!;
 
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
@@ -779,14 +779,9 @@ public sealed class AnalyzeCommand : AsyncCommand<AnalyzeSettings>
                 .StartAsync("Analyzing pipeline...", async ctx =>
                 {
                     ctx.Status("Parsing pipeline structure...");
-                    await Task.Delay(500); // Visual feedback
-
                     ctx.Status("Checking best practices...");
                     result = await _assistant.AnalyzePipelineAsync(request);
                 });
-
-            // Re-fetch result outside status context
-            result = await _assistant.AnalyzePipelineAsync(request);
 
             if (settings.Format.Equals("json", StringComparison.OrdinalIgnoreCase))
             {
